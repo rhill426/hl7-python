@@ -1,12 +1,12 @@
-hl7-python
+#hl7-python
 ==========
 
 Python HL7 library to edit, parse and send HL7 v2.x messages
 
 Drop file into python 3.x library directory
 
-Usage:
-
+##Usage:
+```
 import hl7
 
 ib = hl7.listener(9999)
@@ -26,3 +26,4 @@ while True:
 	out = hl7.toString(msg)
 
 	ack = ob.send(out)
+```
