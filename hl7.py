@@ -1,12 +1,24 @@
 #! /usr/bin/python
 
+#*******************************************************************************#
+# HL7 library file to rapidly parse, receive, and send HL7 data 				#
+# Developed in Python 3.4 														#
+# Sept. 9th, 2014																#
+#*******************************************************************************#
+
+import socket
+from re import compile, match
+
 #-------------------------------------------------------------------------------#
 # This function takes the message as a string and creates "msg" variable 		#
 # in the form of a Python dictionary with HL7 fields as keys and field values   #
 # as the values.  Repeating fields and segments are nested python lists         #
 #-------------------------------------------------------------------------------#
 def parse(raw):
-	"""Turns message into Dictionary"""
+	"""Turns message into Python Dictionary"""
+	if raw == '':
+		return False
+
 	# This will be the returned parsed message dictionary
 	msg = {}
 
@@ -20,18 +32,13 @@ def parse(raw):
 	rep = raw[5:6]
 	esc = raw[6:7]
 	sub = raw[7:8]
-
+	
 	# Finding the newline or return character
-	if "\n" in raw:
-		ret = "\n"
-	else:
-		ret = "\r"
+	raw = raw.replace('\n','\r')
+	ret = "\r"
 
 	# Splitting Segments at the return character
 	segments = raw.split(ret)
-
-	# Starting a repeating segment list
-	repSegList = []
 	
 	# Looping over the segments
 	for segment in segments:
@@ -42,10 +49,16 @@ def parse(raw):
 			continue
 
 		# Adding segment name to segment list
+		repSegList = []
 		if seg in segList:
-			# Checking for repeating segments
-			repSegList.append(msg[seg])
-			msg[seg] = {}
+			# # Checking for repeating segments
+			index = segList.index(seg)
+			if isinstance(msg[segList[index]],list):
+				repSegList = msg[segList[index]]
+				msg[seg] = {}
+			else:
+				repSegList.append(msg[segList[index]])
+				msg[seg] = {}
 		else:
 			# Creating segment dictionary
 			msg[seg] = {}
@@ -65,12 +78,12 @@ def parse(raw):
 
 		# Looping over fields
 		if seg == 'MSH':
-			msg[seg]['MSH.1'] = fld # Hard Coding MSH-1
+			msg[seg]['MSH.1'] = fld
 			fldCount = 2 			# We've already set MSH_1 so we start at 2
 		else:
 			fldCount = 1
 
-		# Process non-repeating segments
+		# Process segments
 		for field in fields:
 			# This is the current key name field
 			currFld = seg+"."+str(fldCount)
@@ -144,6 +157,19 @@ def parse(raw):
 							msg[seg][currFld][currCom] = component
 
 						comCount += 1 	# Incrementing Component Count
+				elif sub in field and currFld != 'MSH.2':
+					# Processing subfields w/o components
+					comCount = 1
+					subCount = 1
+					currCom = seg+"."+str(fldCount)+"."+str(comCount)
+					msg[seg][currFld][currCom] = {}
+					subcomponents = field.split(sub)
+					for subcomponent in subcomponents:
+						currSub = seg+"."+str(fldCount)+"."+str(comCount)+"."+str(subCount)
+						msg[seg][currFld][currCom][currSub] = {}
+						msg[seg][currFld][currCom][currSub] = subcomponent
+
+						subCount += 1 	# Incrementing Sub-Componenet Count
 				else:
 					msg[seg][currFld] = field
 
@@ -153,20 +179,33 @@ def parse(raw):
 			fldCount += 1 	# Incrementing Field Count Variable	
 
 		fieldStr = fld.join(fields)
+		structureStr = '|'.join(fields)
 
 		# Adding return character to structure string
-		structure += fieldStr + ret
+		structure += structureStr + ret
 
-
-	if repSegList:
-		repSegList.append(msg[seg])
-		msg[seg] = repSegList
+		if repSegList:
+			repSegList.append(msg[seg])
+			msg[seg] = repSegList
 
 	# Adding structure string to dictionary
 	msg['structure'] = structure
 
 	# Adding a copy of the original message
 	msg['raw'] = raw
+
+	# Returning a list of segments
+	msg['segments'] = segList
+	
+	# Useful for scripting to kill or error message
+	msg['status'] = ''
+
+	# Returning short-cuts to useful fields
+	msg['msg_date'] = msg['MSH']['MSH.7']
+	msg['msg_type'] = msg['MSH']['MSH.9']['MSH.9.1']
+	msg['msg_event'] = msg['MSH']['MSH.9']['MSH.9.2']
+	msg['msg_id'] = msg['MSH']['MSH.10']
+	msg['msg_version'] = msg['MSH']['MSH.12']
 
 	# Returning dictionary
 	return msg
@@ -175,9 +214,10 @@ def parse(raw):
 # Function takes the python dictionary from the "parse" function and turns it   #
 # back into a string in the formatted HL7 			                         	#
 #-------------------------------------------------------------------------------#
-def sethl7(msg):
+def toString(msg):
 	"""Combining Dictionary into HL7 message"""
-	from re import compile, match
+	if msg == '':
+		return False
 
 	# Setting some regex patterns
 	fieldRegEx = compile('[A-Z0-9]{3}.([0-9]+)')
@@ -203,14 +243,11 @@ def sethl7(msg):
 	rep = msg['MSH']['MSH.2'][1:2]
 	esc = msg['MSH']['MSH.2'][2:3]
 	sub = msg['MSH']['MSH.2'][3:4]
+	ret = "\r"
 
-	# Finding the newline or return character
-	if "\n" in msg['structure']:
-		ret = "\n"
-	else:
-		ret = "\r"
+	segList = []	# list of repeating segments so we don't go over them twice
 
-	repsegs = []	# list of repeating segments so we don't go over them twice
+	seg_dict = {}	# Keeps count of segments in a dictionary
 
 	segments = msg['structure'].split(ret)
 
@@ -228,73 +265,75 @@ def sethl7(msg):
 			# Repeating segment iteration
 			t = 0
 
-			if seg in repsegs:
-				continue	# We don't want to repeat this
-			else:
-				repsegs.append(seg)
-
-			for r in msg[fields[0]]:
-				# Adding segment name to beginning of string
-				outMsg += seg[0:3]
-				
-				# Field iterator
-				i = 1
-				while i < len(fields):
-					if isinstance(msg[fields[0]][t][fields[i]],list):
-						# If field is a list/repeating field, we keep parsing
-						repetitions = []
-						x = 0
-						for repetition in msg[fields[0]][t][fields[i]]:
-							repList = []
-							if isinstance(repetition,dict):
-								# If it is a dictionary then we keep parsing the sub-components
-								for c in order(repetition,comRegEx):
-									if isinstance(msg[fields[0]][t][fields[i]][x][c],dict):
-										# Component contains sub-component
-										subList = []
-										for s in order(msg[fields[0]][t][fields[i]][x][c],subRegEx):
-											subList.append(msg[fields[0]][t][fields[i]][x][c][s])
-										repList.append(sub.join(subList))
-									else:
-										# Appending to field repitition list
-										repList.append(msg[fields[0]][t][fields[i]][x][c])
-							else:
-								# No subfields in repetition
-								repList.append(msg[fields[0]][t][fields[i]][x])
-							x += 1
-							repList = com.join(repList)
-							repetitions.append(repList)
-
-						# Adding the repeating field string to the out message with the repetition character
-						outMsg += fld + rep.join(repetitions)
-
-					else:
-						# Non repeating field
-						if isinstance(msg[fields[0]][t][fields[i]],dict):
-							# Contains components
-							comList = []
-							for c in order(msg[fields[0]][t][fields[i]],comRegEx):
-								if isinstance(msg[fields[0]][t][fields[i]][c],dict):
-									# Contains sub-components
-									subList = []
-									for s in order(msg[fields[0]][t][fields[i]][c],subRegEx):
-										subList.append(msg[fields[0]][t][fields[i]][c][s])
-									comList.append(sub.join(subList))
-								else:
-									comList.append(msg[fields[0]][t][fields[i]][c])
-							outMsg += fld + com.join(comList)
-						else:
-							# Field without components or sub-components
-							outMsg += fld + str(msg[fields[0]][t][fields[i]])
-
-					# Incrementing count
-					i += 1
-
-				# Incrementing segment list count
+			if seg in segList:
+				t = int(seg_dict[seg])
 				t += 1
+				seg_dict[seg] = t
+			else:
+				seg_dict[seg] = t
+				segList.append(seg)
 
-				# Adding return character back on
-				outMsg += ret
+			# Adding segment name to beginning of string
+			outMsg += seg[0:3]
+			
+			# Field iterator
+			i = 1
+			while i < len(fields):
+				if isinstance(msg[fields[0]][seg_dict[seg]][fields[i]],list):
+					# If field is a list/repeating field, we keep parsing
+					repetitions = []
+					x = 0
+					for repetition in msg[fields[0]][seg_dict[seg]][fields[i]]:
+						repList = []
+						if isinstance(repetition,dict):
+							# If it is a dictionary then we keep parsing the sub-components
+							for c in order(repetition,comRegEx):
+								if isinstance(msg[fields[0]][seg_dict[seg]][fields[i]][x][c],dict):
+									# Component contains sub-component
+									subList = []
+									for s in order(msg[fields[0]][seg_dict[seg]][fields[i]][x][c],subRegEx):
+										subList.append(msg[fields[0]][seg_dict[seg]][fields[i]][x][c][s])
+									repList.append(sub.join(subList))
+								else:
+									# Appending to field repitition list
+									repList.append(msg[fields[0]][seg_dict[seg]][fields[i]][x][c])
+						else:
+							# No subfields in repetition
+							repList.append(msg[fields[0]][seg_dict[seg]][fields[i]][x])
+						x += 1
+						repList = com.join(repList)
+						repetitions.append(repList)
+
+					# Adding the repeating field string to the out message with the repetition character
+					outMsg += fld + rep.join(repetitions)
+
+				else:
+					# Non repeating field
+					if isinstance(msg[fields[0]][seg_dict[seg]][fields[i]],dict):
+						# Contains components
+						comList = []
+						for c in order(msg[fields[0]][seg_dict[seg]][fields[i]],comRegEx):
+							if isinstance(msg[fields[0]][seg_dict[seg]][fields[i]][c],dict):
+								# Contains sub-components
+								subList = []
+								for s in order(msg[fields[0]][seg_dict[seg]][fields[i]][c],subRegEx):
+									subList.append(msg[fields[0]][seg_dict[seg]][fields[i]][c][s])
+								comList.append(sub.join(subList))
+							else:
+								comList.append(msg[fields[0]][seg_dict[seg]][fields[i]][c])
+						outMsg += fld + com.join(comList)
+					else:
+						# Field without components or sub-components
+						outMsg += fld + str(msg[fields[0]][seg_dict[seg]][fields[i]])
+
+				# Incrementing count
+				i += 1
+
+			# Incrementing segment list count
+			t += 1
+
+			# Adding return character back on
+			outMsg += ret
 
 		else:
 			# Non repeating segment
@@ -362,130 +401,222 @@ def sethl7(msg):
 	return outMsg
 
 #-------------------------------------------------------------------------------#
-# Function listens on a port on the local machine and returns the data received #
-# Format: tcplisten([Port Number])                                             	#
-# ***Note: When sending to this port the sender must specify the hostname       #
+# Utility functions for scripting Python Dictionary of HL7 fieldS 				#
+#-------------------------------------------------------------------------------#
+def rep(dict):
+	"""Takes a dictionary/HL7 entry and returns boolian if its repeatable"""
+	if isinstance(dict,list):
+		return True
+	else:
+		return False
+
+#-------------------------------------------------------------------------------#
+# Class for inbound TCP functions												#
+# ***Note: When sending to this port the sender must specify the hostname or IP #
 # "localhost" or 127.0.0.1 will not work on the local machine                   #
 #-------------------------------------------------------------------------------#
-def tcplisten(port):
-	"""Listens on port and returns the data"""
-	import socket
-	# Creating Socket
-	s = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
-	s.settimeout(.01)
+class listener:
+	largeMsg = []	# A variable to hold large messages
+	ackFlag = True
 
-	# Binding to address and port
-	host = socket.gethostname() # Localhostname
-	s.bind((host, port))
+	def __init__(self,port):
+		# Initializes connection object
+		self.port = port
 
-	# Listening
-	s.listen(1)
+	def start(self):
+		# Initializes and creates socket
+		ib = socket.socket(socket.AF_INET,socket.SOCK_STREAM)
+		ib.settimeout(.01)
 
-	while True:
-		# Connecting to client
-		try:
-			conn, addr = s.accept()
-		except socket.timeout:
-			pass
-		# if addr:
-		# 	# This is the remote IP and port
-		# 	ip = addr[0]
-		# 	port = addr[1]
-		try:
-			data = conn.recv(65536)
-		except:
-			continue
-		if data:	
-			# Stripping Vertical Tab and File Separators
-			data = data.replace(b'\x0b', b'') # Vertical Tab
-			data = data.replace(b'\x1c', b'') # File Separator
-			data = data.decode('utf-8')       # Converting from byte to string
+		# Binding to address and port
+		host = socket.gethostname() # Localhostname
+		ib.bind((host,self.port))
 
-			# ACK or NACK back
-			ACK = ack(data,'AA')
-			conn.send(ACK)
+		# Starts listener
+		ib.listen(1)
 
-			# This should be the received HL7 message
-			yield data
+		self.ib = ib
+
+		def startListener():
+			while True:
+				# Connecting to client
+				addr = False
+				try:
+					conn, addr = ib.accept()
+				except socket.timeout:
+					pass
+				if addr:
+					# This is the remote IP and port
+					self.address = addr
+					self.conn = conn
+				try:
+					data = conn.recv(65536)
+				except:
+					continue
+				if data:	
+					if b'\x1c' not in data:
+						# Waiting on the end of the message in case its a long message
+						listener.largeMsg.append(data)  	# Converting from byte to string
+						continue							# Keep listening for rest of message
+					if listener.largeMsg:
+						listener.largeMsg.append(data)		# Add the last section
+						data = b''.join(listener.largeMsg)
+						listener.largeMsg = []
+
+					# Stripping Vertical Tab and File Separators
+					data = data.replace(b'\x0b', b'') # Vertical Tab
+					data = data.replace(b'\x1c', b'') # File Separator
+					data = data.decode('utf-8')       # Converting from byte to string
+
+					# ACK or NACK back
+					if listener.ackFlag:
+						ACK = self.ack(data,'AA')
+
+					# This should be the received HL7 message
+					yield data
+
+		self.generator = startListener()
+
+	def ack(self,raw,status):
+		"""Creates AA,AE or AR ACK message and returns it to sender"""
+		# First we parse the message
+		ACK = ""
 			
+		# Get the field separator from MSH-1
+		fld = raw[3:4]
+		com = raw[4:5]
+
+		# Finding the newline or return character
+		if "\n" in raw:
+			ret = "\n"
+		else:
+			ret = "\r"
+
+		# Splitting segments
+		segments = raw.split(ret)
+		# Splitting MSH fields
+		fields = segments[0].split(fld)
+		i = 0
+		MSH = ""
+		while i < 12:
+			if i == 8:
+				# Changing MSH-9-1
+				coms = fields[i].split(com)
+				coms[0] = 'ACK'
+				fields[i] = com.join(coms) 
+			MSH += fields[i] + fld
+			i += 1
+		MSH = MSH[0:len(MSH) - 1]# Trimming last field character
+		# Combining MSH segment with MSA segment
+		# MSA|AA or AE or AR|MSH-10 value
+		ACK = MSH + ret + "MSA" + fld + status + fld + fields[9] + ret
+	        
+		# Wraps message and sends outbound
+		SB = '\x0b'  # <SB>, vertical tab
+		EB = '\x1c'  # <EB>, file separator
+		CR = '\x0d'  # <CR>, \r
+		FF = '\x0c'  # <FF>, new page form feed
+			
+		# wrap in MLLP message container
+		data = SB + ACK + EB + CR
+		data = bytes(data, "utf-8")
+
+		# Sending ACK back on same connection
+		self.conn.send(data)
+
+		# Returning ACK to use if they do it directly
+		return data
+
+	def stop(self):
+		# Stops the listener
+		try:
+			self.ib.close()
+			status = True
+		except:
+			status = False
+
+		return status
+
+	def getMsg(self):
+		# Getting message from listener
+		return next(self.generator)
+
+	def remoteAddress(self):
+		# Prints remote address that is connected
+		if self.address:
+			print(self.address)
+
+	def sendAck(self,boolian):
+		if not boolian:
+			listener.ackFlag = False
+		else:
+			listener.ackFlag = True
 
 #-------------------------------------------------------------------------------#
-# Function generates ACK message from the original message with AA,AE,AR   		#
-# Format: ack(msg,status)    				    								#
+# Class for outbound TCP functions						                 		#
 #-------------------------------------------------------------------------------#
-def ack(raw,status):
-	"""Creates AA,AE or AR ACK message and returns it to sender"""
-	# First we parse the message
-	ACK = ""
+class sender:
+	ackFlag = True
+	def __init__(self,host,port):
+		# Initializes connection object
+		self.host = host
+		self.port = port
 		
-	# Get the field separator from MSH-1
-	fld = raw[3:4]
+		# Initializes and creates socket
+		cnxn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+		self.cnxn = cnxn
 
-	# Finding the newline or return character
-	if "\n" in raw:
-		ret = "\n"
-	else:
-		ret = "\r"
+	def start(self):
+		# Connects to remote host
+		try:
+			self.cnxn.connect((self.host, self.port))
+			status = True
+		except:
+			status = False
 
-	# Splitting segments
-	segments = raw.split(ret)
-	# Splitting MSH fields
-	fields = segments[0].split(fld)
-	# Combining MSH segment with MSA segment
-	# MSA|AA or AE or AR|MSH-10 value
-	ACK = segments[0] + ret + "MSA" + fld + status + fld + fields[9] + ret
-        
-	# Wraps message and sends outbound
-	SB = '\x0b'  # <SB>, vertical tab
-	EB = '\x1c'  # <EB>, file separator
-	CR = '\x0d'  # <CR>, \r
-	FF = '\x0c'  # <FF>, new page form feed
+		return status
+
+	def stop(self):
+		# Stops the connection
+		try:
+			self.cnxn.close()
+			status = True
+		except:
+			status = False
+
+		return status
+
+	def send(self,message):
+		# Sends data to outbound TCP connection
+
+		# Wraps message and sends outbound
+		SB = '\x0b'  # <SB>, vertical tab
+		EB = '\x1c'  # <EB>, file separator
+		CR = '\x0d'  # <CR>, \r
+		FF = '\x0c'  # <FF>, new page form feed
 		
-	# wrap in MLLP message container
-	data = SB + ACK + EB + CR
-	data = bytes(data, "utf-8")
+		# Wrap in MLLP message container and converts to bytes
+		MLLP = SB + message + EB + CR
+		msg = bytes(MLLP, "utf-8")
+		
+		# Sending message
+		try:
+			self.cnxn.send(msg)
+		except:
+			return False
 
-	return data
+		if sender.ackFlag:
+			# Storing the ACK
+			RECV_BUFFER = 4096
+			ACK = self.cnxn.recv(RECV_BUFFER)
+			ACK = ACK.replace(b"\x0b", b"") # Vertical Tab
+			ACK = ACK.replace(b"\x1c", b"") # File Separator
 
-#-------------------------------------------------------------------------------#
-# Function sends to a remote or local Server and port message                   #
-# Format: tcpsend([Host Name], [Port Number], [HL7 message string])            	#
-#-------------------------------------------------------------------------------#
-def tcpsend(host,port,message):
-	"""Sends data to outbound TCP connection"""
-	import socket
-	# Initializes and connects socket
-	s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-	s.connect((host, port))
+			# Returning ACK string
+			return ACK.decode()
 
-	# Wraps message and sends outbound
-	SB = '\x0b'  # <SB>, vertical tab
-	EB = '\x1c'  # <EB>, file separator
-	CR = '\x0d'  # <CR>, \r
-	FF = '\x0c'  # <FF>, new page form feed
-	
-	# Wrap in MLLP message container
-	data = SB + message + EB + CR
-	data = bytes(data, "utf-8")
-	
-	# Sending message
-	s.send(data)
-
-	# Storing the ACK
-	RECV_BUFFER = 4096
-	ACK = s.recv(RECV_BUFFER)
-	ACK = ACK.replace(b"\x0b", b"") # Vertical Tab
-	ACK = ACK.replace(b"\x1c", b"") # File Separator
-
-	return ACK.decode()
-	
-	# Closing Socket
-	s.close()
-
-#-------------------------------------------------------------------------------#
-# This function orders the randomly ordered dictionary entries so that 			#
-# They are processed in HL7 field/component,sub-component order 				#
-# Takes arguments of the unordered dictionary and regex pattern depending on 	#
-# Whether it is a field, component, sub-component and returns a list of the 	#
-# dictionary keys in order 														#
-#-------------------------------------------------------------------------------#
+	def expectAck(self,boolian):
+		if not boolian:
+			sender.ackFlag = False
+		else:
+			sender.ackFlag = True
