@@ -1,13 +1,15 @@
-#! /usr/bin/python
-
 #*******************************************************************************#
-# HL7 library file to rapidly parse, receive, and send HL7 data 				#
+# HL7 library file to rapidly parse, receive, and transport HL7 v2.x data 		#
 # Developed in Python 3.4 														#
-# Sept. 9th, 2014																#
+# January 20, 2015																#
 #*******************************************************************************#
 
 import socket
-from re import compile, match
+import datetime
+from ftplib import FTP
+from io import BytesIO, StringIO
+from re import compile, match, sub
+from os import remove, rename
 
 #-------------------------------------------------------------------------------#
 # This function takes the message as a string and creates "msg" variable 		#
@@ -210,10 +212,10 @@ def parse(raw):
 	# Returning dictionary
 	return msg
 
-#-------------------------------------------------------------------------------#
-# Function takes the python dictionary from the "parse" function and turns it   #
-# back into a string in the formatted HL7 			                         	#
-#-------------------------------------------------------------------------------#
+	#-------------------------------------------------------------------------------#
+	# Function takes the python dictionary from the "parse" function and turns it   #
+	# back into a string in the formatted HL7 			                         	#
+	#-------------------------------------------------------------------------------#
 def toString(msg):
 	"""Combining Dictionary into HL7 message"""
 	if msg == '':
@@ -223,6 +225,7 @@ def toString(msg):
 	fieldRegEx = compile('[A-Z0-9]{3}.([0-9]+)')
 	comRegEx = compile('[A-Z0-9]{3}.[0-9]+.([0-9]+)')
 	subRegEx = compile('[A-Z0-9]{3}.[0-9]+.[0-9]+.([0-9]+)')
+
 	def order(d,regex):
 		"""Function takes dictionary of hl7 field names and orders them"""
 		ordered = {}
@@ -233,7 +236,7 @@ def toString(msg):
 		for k in sorted(ordered):
 			l.append(ordered[k])
 		return l
-
+	
 	# This is the message we will build
 	outMsg = ''
 	
@@ -400,15 +403,25 @@ def toString(msg):
 	# Finished message
 	return outMsg
 
-#-------------------------------------------------------------------------------#
-# Utility functions for scripting Python Dictionary of HL7 fieldS 				#
-#-------------------------------------------------------------------------------#
-def rep(dict):
+#----------------------------------------------#
+# Utilities to use while working with HL7 data #
+#----------------------------------------------#
+def rep(dictionary):
 	"""Takes a dictionary/HL7 entry and returns boolian if its repeatable"""
-	if isinstance(dict,list):
+	if isinstance(dictionary,list):
 		return True
 	else:
 		return False
+
+def date(string,format):
+	"""Takes either date string or generates timestamp and formats"""
+	if string.lower() == 'now':
+		string = datetime.datetime.now()
+		string = datetime.datetime.strftime(string, format)
+	else:
+		string = datetime.datetime.strptime(string, format)
+		string = datetime.datetime.strftime(string, format)
+	return string
 
 #-------------------------------------------------------------------------------#
 # Class for inbound TCP functions												#
@@ -434,7 +447,6 @@ class listener:
 
 		# Starts listener
 		ib.listen(1)
-
 		self.ib = ib
 
 		def startListener():
@@ -544,7 +556,7 @@ class listener:
 	def remoteAddress(self):
 		# Prints remote address that is connected
 		if self.address:
-			print(self.address)
+			return self.address
 
 	def sendAck(self,boolian):
 		if not boolian:
@@ -620,3 +632,216 @@ class sender:
 			sender.ackFlag = False
 		else:
 			sender.ackFlag = True
+
+#---------------------------------------#
+#  Class for file Reading and Writing	#
+#---------------------------------------#
+class file:
+	"""File reader designed for reading HL7 files"""
+	msgList = []
+
+	def __init__(self,path,filename):
+		path = path.replace('\\','/')
+		self.path = path
+		self.filename = filename
+		self.fullpath = self.path + '/' + self.filename
+
+	def read(self,splitChar = 'MSH'):
+		# Reads file and splits HL7 messages
+		f = open(self.fullpath,'r')
+		data = f.read()
+		f.close()
+
+		messages = data.split(splitChar)
+		for msg in messages:
+			if msg == '':
+				continue
+			file.msgList.append(splitChar + msg)
+
+		return file.msgList
+
+	def open(self,flag='a'):
+		try:
+			if flag.lower() == 'w':
+				self.f = open(self.fullpath,'w')
+			else:
+				self.f = open(self.fullpath,'a')
+			return self
+		except:
+			return "Unable to write to file %s" % (self.fullpath)
+
+	def write(self,data):
+		"""Writing or appending to file"""
+		try:
+			self.f.write(data)
+			if not file.appendFlag:
+				self.f.close()
+			return self
+		except:
+			return False
+
+	def close(self):
+		"""Closing file"""
+		self.f.close()
+
+	def delete(self):
+		"""Deleting file after finished"""
+		remove(self.fullpath)
+
+	def rename(self,newname):
+		"""Deleting file after finished"""
+		rename(self.fullpath, self.path + '/' + newname)
+		self.fullpath = self.path + '/' + newname
+
+	def batch(self,comments = ''):
+		"""HL7 batching file"""
+		# Reading file
+		temp = open(self.fullpath,'r')
+		# If FHS or BHS segments already exist, remove them
+		data = temp.read()
+		temp.close()
+		temp = open(self.fullpath,'w')
+		data = data.replace('\n','\r')
+		data = sub(r'FHS(.*?)\r|BHS(.*?)\r','',data)
+		temp.write(data)
+		temp.close()
+		messages = self.read()
+		# Getting MSH segment from first message
+		MSH = messages[0]
+		MSH = MSH.replace('\n','\r')
+		MSH = MSH.split('\r')
+		MSH = MSH[0]
+		fld = MSH[3:4]
+		total = self.total()
+
+		# Editing FHS segment
+		FHSList = MSH.split(fld)
+		FHSList[0] = 'FHS'
+		FHSList[6] = date('now','%Y%m%d%H%M%S')
+		FHSList[8] = self.filename
+		FHSList[9] = comments
+		FHSList[10] = date('now','%Y%m%d%H%M%S')
+		i = 0
+		FHS = ''
+		while i < 11:
+			# We only want first 11 fields
+			if i == 10:
+				FHS += FHSList[i]
+			else:
+				FHS += FHSList[i] + fld
+			i += 1
+
+		# Editing BHS segment
+		BHSList = MSH.split(fld)
+		BHSList[0] = 'BHS'
+		BHSList[6] = date('now','%Y%m%d%H%M%S')
+		BHSList[8] = ''
+		BHSList[9] = comments
+		BHSList[10] = date('now','%Y%m%d%H%M%S')
+		i = 0
+		BHS = ''
+		while i < 11:
+			# We only want first 11 fields
+			if i == 10:
+				BHS += BHSList[i]
+			else:
+				BHS += BHSList[i] + fld
+			i += 1
+		
+		# Writing FHS and BHS segments to file with original data
+		batch = open(self.fullpath,'r')
+		data = batch.read()
+		batch.close()
+		batch = open(self.fullpath,'w')
+		batch = batch.replace('\n','\r')
+		batch.write(FHS+'\r'+BHS+'\r'+data+'BHS'+fld+str(total)+'\r'+'FHS'+fld+'1'+'\r')
+		batch.close()
+
+	def debatch(self):
+		"""HL7 batching file"""
+		# Reading file
+		temp = open(self.fullpath,'r')
+		# If FHS or BHS segments already exist, remove them
+		data = temp.read()
+		temp.close()
+		temp = open(self.fullpath,'w')
+		data = data.replace('\n','\r')
+		data = sub(r'FHS(.*?)\r|BHS(.*?)\r','',data)
+		temp.write(data)
+		temp.close()
+
+	def total(self):
+		"""Return total of inbound messages"""
+		return len(file.msgList)
+
+#---------------------------------------#
+#  Class for ftp Reading and Writing	#
+#---------------------------------------#
+class ftp:
+	mode = 'ASCII'
+	"""Reading and Writing FTP"""
+	def __init__(self,address,port=21):
+		self.address = address
+		self.port = port
+		self.ftp = FTP()
+
+	def connect(self,usr,pwd):
+		self.ftp.connect(self.address,self.port)
+		self.ftp.login(usr,pwd)
+		usr = ''
+		port = ''
+		return self.ftp.getwelcome()
+
+	def cd(self,directory):
+		self.ftp.cwd(directory)
+		return self.ftp.pwd()
+
+	def send(self,destname,data):
+		try:
+			if ftp.mode == 'ASCII':
+				f = BytesIO(data.encode())
+				self.ftp.storlines("STOR " + destname, f)
+			else:
+				f = BytesIO(data)
+				self.ftp.storbinary("STOR " + destname, f)
+			return True
+		except:
+			return False
+
+	def get(self,destname,splitChar='MSH'):
+		try:
+			f = BytesIO()
+			self.ftp.retrbinary("RETR " + destname, f.write)
+			data = f.getvalue().decode()
+			messages = []
+			for msg in data.split(splitChar):
+				if msg == '':
+					continue
+				messages.append(splitChar + msg)
+			return messages
+		except:
+			return False
+
+	def delete(self,file):
+		try:
+			self.ftp.delete(file)
+			return True
+		except:
+			return False
+
+	def rename(self,old,new):
+		try:
+			self.ftp.rename(old,new)
+			return True
+		except:
+			return False
+
+	def setMode(self,mode):
+		if mode.upper() == 'BINARY':
+			ftp.mode = 'BINARY'
+		else:
+			ftp.mode = 'ASCII'
+		return ftp.mode
+
+	def close(self):
+		self.ftp.quit()
