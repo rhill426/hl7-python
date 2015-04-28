@@ -213,10 +213,10 @@ def parse(raw):
     # Returning dictionary
     return msg
 
-    #-------------------------------------------------------------------------------#
-    # Function takes the python dictionary from the "parse" function and turns it   #
-    # back into a string in the formatted HL7                                       #
-    #-------------------------------------------------------------------------------#
+#-------------------------------------------------------------------------------#
+# Function takes the python dictionary from the "parse" function and turns it   #
+# back into a string in the formatted HL7                                       #
+#-------------------------------------------------------------------------------#
 def toString(msg):
     """Combining Dictionary into HL7 message"""
     if msg == '':
@@ -256,10 +256,12 @@ def toString(msg):
     segments = msg['structure'].split(ret)
 
     for seg in segments:
+        segName = seg[0:3]
+        
         # Skipping blanks
-        if seg[0:3] == '' or seg[0:3] not in msg:
+        if segName == '' or segName not in msg:
             continue
-
+            
         # Splitting segment into fields
         fields = seg.split('|')
 
@@ -269,72 +271,72 @@ def toString(msg):
             # Repeating segment iteration
             t = 0
 
-            if seg in segList:
-                t = int(seg_dict[seg])
+            if segName in segList:
+                t = int(seg_dict[segName])
                 t += 1
-                seg_dict[seg] = t
+                seg_dict[segName] = t
             else:
-                seg_dict[seg] = t
-                segList.append(seg)
+                seg_dict[segName] = t
+                segList.append(segName)
 
             # Adding segment name to beginning of string
-            outMsg += seg[0:3]
+            outMsg += segName
             
             # Field iterator
             i = 1
             while i < len(fields):
-                if isinstance(msg[fields[0]][seg_dict[seg]][fields[i]],list):
-                    # If field is a list/repeating field, we keep parsing
-                    repetitions = []
-                    x = 0
-                    for repetition in msg[fields[0]][seg_dict[seg]][fields[i]]:
-                        repList = []
-                        if isinstance(repetition,dict):
-                            # If it is a dictionary then we keep parsing the sub-components
-                            for c in order(repetition,comRegEx):
-                                if isinstance(msg[fields[0]][seg_dict[seg]][fields[i]][x][c],dict):
-                                    # Component contains sub-component
-                                    subList = []
-                                    for s in order(msg[fields[0]][seg_dict[seg]][fields[i]][x][c],subRegEx):
-                                        subList.append(msg[fields[0]][seg_dict[seg]][fields[i]][x][c][s])
-                                    repList.append(sub.join(subList))
-                                else:
-                                    # Appending to field repitition list
-                                    repList.append(msg[fields[0]][seg_dict[seg]][fields[i]][x][c])
-                        else:
-                            # No subfields in repetition
-                            repList.append(msg[fields[0]][seg_dict[seg]][fields[i]][x])
-                        x += 1
-                        repList = com.join(repList)
-                        repetitions.append(repList)
-
-                    # Adding the repeating field string to the out message with the repetition character
-                    outMsg += fld + rep.join(repetitions)
-
-                else:
-                    # Non repeating field
-                    if isinstance(msg[fields[0]][seg_dict[seg]][fields[i]],dict):
-                        # Contains components
-                        comList = []
-                        for c in order(msg[fields[0]][seg_dict[seg]][fields[i]],comRegEx):
-                            if isinstance(msg[fields[0]][seg_dict[seg]][fields[i]][c],dict):
-                                # Contains sub-components
-                                subList = []
-                                for s in order(msg[fields[0]][seg_dict[seg]][fields[i]][c],subRegEx):
-                                    subList.append(msg[fields[0]][seg_dict[seg]][fields[i]][c][s])
-                                comList.append(sub.join(subList))
+                try:
+                    if isinstance(msg[fields[0]][seg_dict[segName]][fields[i]],list):
+                        # If field is a list/repeating field, we keep parsing
+                        repetitions = []
+                        x = 0
+                        for repetition in msg[fields[0]][seg_dict[segName]][fields[i]]:
+                            repList = []
+                            if isinstance(repetition,dict):
+                                # If it is a dictionary then we keep parsing the sub-components
+                                for c in order(repetition,comRegEx):
+                                    if isinstance(msg[fields[0]][seg_dict[segName]][fields[i]][x][c],dict):
+                                        # Component contains sub-component
+                                        subList = []
+                                        for s in order(msg[fields[0]][seg_dict[segName]][fields[i]][x][c],subRegEx):
+                                            subList.append(msg[fields[0]][seg_dict[segName]][fields[i]][x][c][s])
+                                        repList.append(sub.join(subList))
+                                    else:
+                                        # Appending to field repetition list
+                                        repList.append(msg[fields[0]][seg_dict[segName]][fields[i]][x][c])
                             else:
-                                comList.append(msg[fields[0]][seg_dict[seg]][fields[i]][c])
-                        outMsg += fld + com.join(comList)
+                                # No sub-fields in repetition
+                                repList.append(msg[fields[0]][seg_dict[segName]][fields[i]][x])
+                            x += 1
+                            repList = com.join(repList)
+                            repetitions.append(repList)
+
+                        # Adding the repeating field string to the out message with the repetition character
+                        outMsg += fld + rep.join(repetitions)
+
                     else:
-                        # Field without components or sub-components
-                        outMsg += fld + str(msg[fields[0]][seg_dict[seg]][fields[i]])
+                        # Non repeating field
+                        if isinstance(msg[fields[0]][seg_dict[segName]][fields[i]],dict):
+                            # Contains components
+                            comList = []
+                            for c in order(msg[fields[0]][seg_dict[segName]][fields[i]],comRegEx):
+                                if isinstance(msg[fields[0]][seg_dict[segName]][fields[i]][c],dict):
+                                    # Contains sub-components
+                                    subList = []
+                                    for s in order(msg[fields[0]][seg_dict[segName]][fields[i]][c],subRegEx):
+                                        subList.append(msg[fields[0]][seg_dict[segName]][fields[i]][c][s])
+                                    comList.append(sub.join(subList))
+                                else:
+                                    comList.append(msg[fields[0]][seg_dict[segName]][fields[i]][c])
+                            outMsg += fld + com.join(comList)
+                        else:
+                            # Field without components or sub-components
+                            outMsg += fld + str(msg[fields[0]][seg_dict[segName]][fields[i]])
 
-                # Incrementing count
-                i += 1
-
-            # Incrementing segment list count
-            t += 1
+                    # Incrementing count
+                    i += 1
+                except Exception as e:
+                    i += 1
 
             # Adding return character back on
             outMsg += ret
@@ -343,60 +345,64 @@ def toString(msg):
             # Non repeating segment
             
             # Adding segment name to beginning of string
-            outMsg += seg[0:3]
+            outMsg += segName
 
             # field iterator
             i = 1
             while i < len(fields):
-                if isinstance(msg[fields[0]][fields[i]],list):
-                    # If field is a list/repeating field, we keep parsing
-                    repetitions = []
-                    x = 0
-                    for repetition in msg[fields[0]][fields[i]]:
-                        repList = []
-                        if isinstance(repetition,dict):
-                            # If it is a dictionary then we keep parsing the sub-components
-                            for c in order(repetition,comRegEx):
-                                if isinstance(msg[fields[0]][fields[i]][x][c],dict):
-                                    # Component contains sub-component
-                                    subList = []
-                                    for s in order(msg[fields[0]][fields[i]][x][c],subRegEx):
-                                        subList.append(msg[fields[0]][fields[i]][x][c][s])
-                                    repList.append(sub.join(subList))
-                                else:
-                                    # Appending to field repitition list
-                                    repList.append(msg[fields[0]][fields[i]][x][c])
-                        else:
-                            # No subfields in repetition
-                            repList.append(msg[fields[0]][fields[i]][x])
-                        x += 1
-                        repList = com.join(repList)
-                        repetitions.append(repList)
-
-                    # Adding the repeating field string to the out message with the repetition character
-                    outMsg += fld + rep.join(repetitions)
-
-                else:
-                    # Non repeating field
-                    if isinstance(msg[fields[0]][fields[i]],dict):
-                        # Contains components
-                        comList = []
-                        for c in order(msg[fields[0]][fields[i]],comRegEx):
-                            if isinstance(msg[fields[0]][fields[i]][c],dict):
-                                # Contains sub-components
-                                subList = []
-                                for s in order(msg[fields[0]][fields[i]][c],subRegEx):
-                                    subList.append(msg[fields[0]][fields[i]][c][s])
-                                comList.append(sub.join(subList))
+                try:
+                    if isinstance(msg[fields[0]][fields[i]],list):
+                        # If field is a list/repeating field, we keep parsing
+                        repetitions = []
+                        x = 0
+                        for repetition in msg[fields[0]][fields[i]]:
+                            repList = []
+                            if isinstance(repetition,dict):
+                                # If it is a dictionary then we keep parsing the sub-components
+                                for c in order(repetition,comRegEx):
+                                    if isinstance(msg[fields[0]][fields[i]][x][c],dict):
+                                        # Component contains sub-component
+                                        subList = []
+                                        for s in order(msg[fields[0]][fields[i]][x][c],subRegEx):
+                                            subList.append(msg[fields[0]][fields[i]][x][c][s])
+                                        repList.append(sub.join(subList))
+                                    else:
+                                        # Appending to field repetition list
+                                        repList.append(msg[fields[0]][fields[i]][x][c])
                             else:
-                                comList.append(msg[fields[0]][fields[i]][c])
-                        outMsg += fld + com.join(comList)
-                    else:
-                        # Field without components or sub-components
-                        outMsg += fld + str(msg[fields[0]][fields[i]])
+                                # No sub-fields in repetition
+                                repList.append(msg[fields[0]][fields[i]][x])
+                            x += 1
+                            repList = com.join(repList)
+                            repetitions.append(repList)
 
-                # Incrementing count
-                i += 1
+                        # Adding the repeating field string to the out message with the repetition character
+                        outMsg += fld + rep.join(repetitions)
+
+                    else:
+                        # Non repeating field
+                        if isinstance(msg[fields[0]][fields[i]],dict):
+                            # Contains components
+                            comList = []
+                            for c in order(msg[fields[0]][fields[i]],comRegEx):
+                                if isinstance(msg[fields[0]][fields[i]][c],dict):
+                                    # Contains sub-components
+                                    subList = []
+                                    for s in order(msg[fields[0]][fields[i]][c],subRegEx):
+                                        subList.append(msg[fields[0]][fields[i]][c][s])
+                                    comList.append(sub.join(subList))
+                                else:
+                                    comList.append(msg[fields[0]][fields[i]][c])
+                            outMsg += fld + com.join(comList)
+                        else:
+                            # Field without components or sub-components
+                            outMsg += fld + str(msg[fields[0]][fields[i]])
+
+                    # Incrementing count
+                    i += 1
+                except Exception as e:
+                    print(e)
+                    i += 1
 
             # Adding return character back on
             outMsg += ret
@@ -615,6 +621,7 @@ class tcp:
             # Initializes connection object
             self.ackFlag = True
             self.status = False
+            self.evalAckFlag = False
             self.timeout = 5
             self.host = host
             self.port = port
@@ -623,6 +630,14 @@ class tcp:
             cnxn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             cnxn.settimeout(self.timeout)
             self.cnxn = cnxn
+
+        def evaluate(self,ack):
+            """Parsing the ACK and evaluating MSA-1"""
+            f = ack[3:4]
+            if 'MSA'+f+'AA' not in ack:
+                return False
+            else:
+                return True
 
         def start(self):
             """Connects to remote host"""
@@ -686,9 +701,19 @@ class tcp:
                     return False
                 ACK = ACK.replace(b"\x0b", b"") # Vertical Tab
                 ACK = ACK.replace(b"\x1c", b"") # File Separator
+                ACK = ACK.decode()
 
                 # Returning ACK string
-                return ACK.decode()
+                if self.evalAckFlag:
+                    AckCheck = self.evaluate(ACK)
+                    if AckCheck:
+                        # We return the ACK
+                        return ACK
+                    else:
+                        # We raise an error
+                        raise ValueError('System returned value other than AA')
+                else:
+                    return ACK
 
         def status(self):
             """Checking if oubound connection is still open"""
@@ -707,6 +732,13 @@ class tcp:
             else:
                 self.ackFlag = True
 
+        def evalAck(self,boolian):
+            """Flag to to evaluate the ACK and if not "AA" we throw an error"""
+            if not boolian:
+                self.evalAckFlag = False
+            else:
+                self.evalAckFlag = True
+
         def setTimeout(self,timeout):
             """Setings time timeout on waiting ACK's.  Default is 5 seconds"""
             self.timeout = timeout
@@ -719,11 +751,16 @@ class file:
     """File reader designed for reading HL7 files"""
     msgList = []
 
-    def __init__(self,path,filename):
+    def __init__(self,path,filename=None):
         path = path.replace('\\','/')
         self.path = path
         self.filename = filename
-        self.fullpath = self.path + '/' + self.filename
+        if self.filename:
+            # If they supply a filename we get the full path
+            self.fullpath = self.path + '/' + self.filename
+        else:
+            # We use the filepath, assuming they put it there
+            self.fullpath = self.path
 
     def read(self,splitChar = 'MSH'):
         # Reads file and splits HL7 messages
