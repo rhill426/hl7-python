@@ -486,6 +486,7 @@ class tcp:
             # Connection variables populated when connection is established
             self.conn = None
             self.addr = None
+            self.halt = False
 
         def start(self):
             # Initializes and creates socket
@@ -503,6 +504,9 @@ class tcp:
             def startListener():
                 while True:
                     # Connecting to client
+                    if self.halt:
+                        # They are stopping the connection
+                        break
                     addr = False
                     try:
                         conn, addr = ib.accept()
@@ -540,7 +544,7 @@ class tcp:
 
             self.generator = startListener()
 
-        def ack(self,raw,status):
+        def ack(self,raw,status,error=''):
             """Creates AA,AE or AR ACK message and returns it to sender"""
             # First we parse the message
             ACK = ""
@@ -572,7 +576,7 @@ class tcp:
             MSH = MSH[0:len(MSH) - 1]# Trimming last field character
             # Combining MSH segment with MSA segment
             # MSA|AA or AE or AR|MSH-10 value
-            ACK = MSH + ret + "MSA" + fld + status + fld + fields[9] + ret
+            ACK = MSH + ret + "MSA" + fld + status + fld + fields[9] + fld + str(error) + ret
                 
             # Wraps message and sends outbound
             SB = '\x0b'  # <SB>, vertical tab
@@ -592,6 +596,7 @@ class tcp:
 
         def stop(self):
             # Stops the listener
+            self.halt = True
             try:
                 self.ib.close()
                 status = True
@@ -609,7 +614,7 @@ class tcp:
             if self.address:
                 return self.address
 
-        def sendAck(self,boolian):
+        def autoAck(self,boolian):
             if not boolian:
                 self.ackFlag = False
             else:
@@ -704,16 +709,7 @@ class tcp:
                 ACK = ACK.decode()
 
                 # Returning ACK string
-                if self.evalAckFlag:
-                    AckCheck = self.evaluate(ACK)
-                    if AckCheck:
-                        # We return the ACK
-                        return ACK
-                    else:
-                        # We raise an error
-                        raise ValueError('System returned value other than AA')
-                else:
-                    return ACK
+                return ACK
 
         def status(self):
             """Checking if oubound connection is still open"""
@@ -732,12 +728,12 @@ class tcp:
             else:
                 self.ackFlag = True
 
-        def evalAck(self,boolian):
-            """Flag to to evaluate the ACK and if not "AA" we throw an error"""
-            if not boolian:
-                self.evalAckFlag = False
-            else:
-                self.evalAckFlag = True
+        # def evalAck(self,boolian):
+            # """Flag to to evaluate the ACK and if not "AA" we throw an error"""
+            # if not boolian:
+                # self.evalAckFlag = False
+            # else:
+                # self.evalAckFlag = True
 
         def setTimeout(self,timeout):
             """Setings time timeout on waiting ACK's.  Default is 5 seconds"""
